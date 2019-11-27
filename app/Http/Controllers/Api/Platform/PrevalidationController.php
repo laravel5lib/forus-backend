@@ -19,7 +19,7 @@ class PrevalidationController extends Controller
     use ThrottlesLogins;
 
     private $recordRepo;
-    private $maxAttempts = 3;
+    private $maxAttempts = 5;
     private $decayMinutes = 180;
 
     /**
@@ -154,16 +154,16 @@ class PrevalidationController extends Controller
      * @param Request $request
      * @param Prevalidation $prevalidation
      * @return array
+     * @throws \Illuminate\Auth\Access\AuthorizationException
      */
     public function showFundId(
         Request $request,
         Prevalidation $prevalidation
     ) {
-        if ($this->hasTooManyLoginAttempts($request)) {
-            abort(429, 'To many attempts.');
+        if ($this->loginAttemptsLimitReached($request)) {
+            abort(429, 'Too many attempts.');
         }
-
-        $this->incrementLoginAttempts($request);
+        $this->authorize('redeem', $prevalidation);
 
         return [
             'data' => $prevalidation->only('fund_id')
@@ -182,13 +182,10 @@ class PrevalidationController extends Controller
         Request $request,
         Prevalidation $prevalidation = null
     ) {
-        if ($this->hasTooManyLoginAttempts($request)) {
-            abort(429, 'To many attempts.');
+        if ($this->loginAttemptsLimitReached($request)) {
+            abort(429, 'Too many attempts.');
         }
-
-        $this->incrementLoginAttempts($request);
         $this->authorize('redeem', $prevalidation);
-        $this->clearLoginAttempts($request);
 
         foreach($prevalidation->records as $record) {
             /** @var $record PrevalidationRecord */
@@ -226,5 +223,34 @@ class PrevalidationController extends Controller
     protected function throttleKey(Request $request)
     {
         return Str::lower($request->ip());
+    }
+
+    /**
+     * @param Request $request
+     * @return bool
+     */
+    protected function loginAttemptsLimitReached(Request $request) {
+        $key = $this->throttleKey($request);
+        $rateLimiter = $this->limiter();
+        //$rateLimiter->clear($key);
+
+        $attempts = $rateLimiter->attempts($key);
+        if ($attempts <= 3) {
+            $this->decayMinutes = 2;
+        } elseif ($attempts == 4) {
+            $this->decayMinutes = 30;
+        } else {
+            $this->decayMinutes = 180;
+        }
+
+        //logger()->info('attempts: '.$attempts);
+        //logger()->info('decay minutes: '.$this->decayMinutes);
+
+        $limit_reached = $this->hasTooManyLoginAttempts($request);
+        //logger()->info('limit reached: '.($limit_reached ? 'yes': 'no'));
+
+        $this->incrementLoginAttempts($request);
+
+        return $limit_reached;
     }
 }
